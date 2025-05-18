@@ -1,0 +1,65 @@
+import tiktoken
+from openai import OpenAI, OpenAIError
+from dotenv import load_dotenv
+import os
+import logging
+import time
+
+load_dotenv()
+openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def split_text(text, max_tokens=1024):
+    enc = tiktoken.get_encoding("cl100k_base")
+    words = text.split()
+    chunks = []
+    chunk = []
+
+    for word in words:
+        chunk.append(word)
+        if len(enc.encode(" ".join(chunk))) > max_tokens:
+            chunks.append(" ".join(chunk))
+            chunk = []
+    if chunk:
+        chunks.append(" ".join(chunk))
+    return chunks
+
+def embed_texts(texts):
+    embeddings = []
+    try:
+        logging.info(f"Создание эмбеддингов для {len(texts)} фрагментов")
+        response = openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=texts
+        )
+        embeddings = [r.embedding for r in response.data]
+        logging.info("Эмбеддинги успешно созданы")
+    except OpenAIError as e:
+        logging.error(f"Ошибка при вызове OpenAI API: {e}")
+        time.sleep(2)
+    except Exception as e:
+        logging.error(f"Непредвиденная ошибка: {e}")
+    return embeddings
+
+def ask_gpt(relevant_chunks, user_question):
+    from openai import OpenAI
+
+    context = "\n\n".join(relevant_chunks)
+    messages = [
+        {"role": "system", "content": "Ты — ассистент, помогающий анализировать книги и тексты. Отвечай развернуто, содержательно, используя только предоставленные фрагменты. Ты также должен предложить своё видение ситуации на основании этих фрагментов"},
+        {"role": "user", "content": f"Вот фрагменты текста:\n\n{context}\n\nВопрос: {user_question}"}
+    ]
+
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=messages
+        )
+        return response.choices[0].message.content.strip()
+    except OpenAIError as e:
+        logging.error(f"Ошибка при запросе к chat API: {e}")
+        return "Произошла ошибка при попытке получить ответ."
+    except Exception as e:
+        logging.error(f"Непредвиденная ошибка: {e}")
+        return "Непредвиденная ошибка во время ответа."
