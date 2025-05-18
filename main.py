@@ -23,12 +23,24 @@ class MemoryBotGUI:
         ttk.Button(root, text="Задать вопрос", command=self.ask_question).pack(pady=10)
 
         ttk.Label(root, text="Релевантные фрагменты:").pack(anchor="w")
-        self.fragments_text = scrolledtext.ScrolledText(root, height=10)
+        self.fragments_text = scrolledtext.ScrolledText(root, height=10, wrap=tk.WORD, undo=True)
+        self.fragments_text.config(exportselection=False)
         self.fragments_text.pack(fill="both", expand=True)
 
         ttk.Label(root, text="Ответ GPT:").pack(anchor="w")
-        self.answer_text = scrolledtext.ScrolledText(root, height=10)
+        self.answer_text = scrolledtext.ScrolledText(root, height=10, wrap=tk.WORD, undo=True)
+        self.answer_text.config(exportselection=False)
         self.answer_text.pack(fill="both", expand=True)
+
+        self.fragments_text.bind("<Control-a>", self.select_all)
+        self.fragments_text.bind("<Control-A>", self.select_all)
+        self.answer_text.bind("<Control-a>", self.select_all)
+        self.answer_text.bind("<Control-A>", self.select_all)
+
+    def select_all(self, event):
+        widget = event.widget
+        widget.tag_add("sel", "1.0", "end")
+        return "break"
 
     def ask_question(self):
         book = self.book_var.get()
@@ -64,6 +76,43 @@ for file_path in text_files:
     chunks = split_text(text)
     chunks_map[file_path.name] = chunks
 
+    # Генерация эмбеддингов с кэшированием
+    cache_path = file_path.with_suffix(".pkl")
+
+    if cache_path.exists():
+        with open(cache_path, "rb") as f:
+            embeddings = pickle.load(f)
+        print(f"Загружены эмбеддинги из кэша для {file_path.name}")
+    else:
+        from tqdm import tqdm
+
+        embeddings = []
+        for i in tqdm(range(0, len(chunks), 10), desc=f"Создание эмбеддингов для {file_path.name}"):
+            batch = chunks[i:i+10]
+            batch_embeddings = embed_texts(batch)
+
+            if len(batch_embeddings) != len(batch):
+                print(f"⚠️  Пропущено {len(batch) - len(batch_embeddings)} фрагментов в batch {i} из-за ошибки эмбеддинга")
+                continue
+
+            embeddings.extend(batch_embeddings)
+        with open(cache_path, "wb") as f:
+            pickle.dump(embeddings, f)
+        print(f"Созданы и сохранены эмбеддинги для {file_path.name}")
+
+    if len(chunks) != len(embeddings):
+        print(f"Предупреждение: для {file_path.name} количество эмбеддингов не совпадает с количеством фрагментов!")
+    else:
+        for i in range(len(chunks)):
+            try:
+                collection.add(
+                documents=[chunks[i]],
+                embeddings=[embeddings[i]],
+                ids=[f"{file_path.stem}_chunk_{i}"]
+            )
+            except Exception as e:
+                print(f"Ошибка при добавлении chunk {i} из файла {file_path.name}: {e}")
+
 def expand_chunks_by_neighbors(chunks, all_chunks, window=1):
     result = set(chunks)
     for doc in chunks:
@@ -83,7 +132,7 @@ def ask_fn(book_name, query):
     all_chunks = chunks_map[book_name]
 
     query_embed = embed_texts([query])[0]
-    results = collection.query(query_embeddings=[query_embed], n_results=5, include=["documents"])
+    results = collection.query(query_embeddings=[query_embed], n_results=1, include=["documents"])
 
     relevant_chunks = results["documents"][0]
     expanded_chunks = expand_chunks_by_neighbors(relevant_chunks, all_chunks)
