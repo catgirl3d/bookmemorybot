@@ -11,6 +11,20 @@ import hashlib
 # Настройка клиента ChromaDB
 client = chromadb.PersistentClient(path="db/")
 
+def expand_chunks_by_neighbors(chunks, all_chunks, window=1):
+    result = set(chunks)
+    for doc in chunks:
+        try:
+            idx = all_chunks.index(doc)
+            for offset in range(-window, window + 1):
+                if offset == 0:
+                    continue
+                neighbor = all_chunks[idx + offset]
+                result.add(neighbor)
+        except (ValueError, IndexError):
+            continue
+    return list(result)
+
 # Поиск всех текстовых файлов в папке data
 data_path = Path("data/")
 text_files = list(data_path.glob("*.txt"))
@@ -29,17 +43,21 @@ if hash_path.exists():
 else:
     file_hashes = {}
 
+all_chunks_map = {}
+
 for file_path in text_files:
     print(f"\nОбработка файла: {file_path.name}")
     file_hash = get_file_hash(file_path)
     collection_name = file_path.stem.replace(" ", "_").lower()
 
-    # Проверка на изменение файла
     if file_path.name in file_hashes and file_hashes[file_path.name] != file_hash:
         print("Файл изменён — коллекция будет пересоздана.")
         client.delete_collection(collection_name)
     elif file_path.name in file_hashes:
         print("Файл не изменён. Пропуск загрузки.")
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        all_chunks_map[file_path.name] = split_text(text)
         continue
 
     file_hashes[file_path.name] = file_hash
@@ -48,6 +66,7 @@ for file_path in text_files:
         text = f.read()
 
     chunks = split_text(text)
+    all_chunks_map[file_path.name] = chunks
     cache_path = file_path.with_suffix(".pkl")
     embeddings = []
 
@@ -87,11 +106,9 @@ for file_path in text_files:
             ids=[doc_id]
         )
 
-# Сохранение хэшей файлов
 with open("data/file_hashes.pkl", "wb") as f:
     pickle.dump(file_hashes, f)
 
-# Выбор файла для запроса
 print("\nДоступные файлы:")
 available_files = [f.name for f in text_files]
 for name in available_files:
@@ -103,7 +120,6 @@ if target_file and target_file not in existing_sources:
     print("Файл не найден. Будет выполнен поиск по всем книгам.")
     target_file = ""
 
-# Цикл общения
 while True:
     query = input("\nВведите запрос (или 'exit' для выхода): ")
     if query.strip().lower() == "exit":
@@ -127,13 +143,19 @@ while True:
     if target_file:
         collection_name = Path(target_file).stem.replace(" ", "_").lower()
         collections_to_query = [client.get_or_create_collection(name=collection_name)]
+        all_chunks = all_chunks_map.get(target_file, [])
     else:
         collections_to_query = [client.get_or_create_collection(name=Path(f.name).stem.replace(" ", "_").lower()) for f in text_files]
+        all_chunks = []
+        for f in text_files:
+            all_chunks += all_chunks_map.get(f.name, [])
 
     relevant_chunks = []
     for col in collections_to_query:
         results = col.query(**query_args)
         relevant_chunks.extend(results["documents"][0])
+
+    relevant_chunks = expand_chunks_by_neighbors(relevant_chunks, all_chunks)
 
     print("\nРелевантные фрагменты:")
     for doc in relevant_chunks:
