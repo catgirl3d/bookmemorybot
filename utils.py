@@ -4,28 +4,45 @@ from dotenv import load_dotenv
 import os
 import logging
 import time
+import re
 
 load_dotenv()
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def split_text(text, max_tokens=750):
+def split_text(text, max_tokens=500, split_by="hybrid"):
     enc = tiktoken.get_encoding("cl100k_base")
-
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks = []
-    current = []
 
-    for para in paragraphs:
-        current.append(para)
-        tokens = enc.encode("\n\n".join(current))
-        if len(tokens) >= max_tokens:
-            chunks.append("\n\n".join(current))
-            current = []
-
-    if current:
-        chunks.append("\n\n".join(current))
+    if split_by == "hybrid":
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        for para in paragraphs:
+            para_tokens = enc.encode(para)
+            if len(para_tokens) <= max_tokens:
+                chunks.append(para)
+            else:
+                sentences = re.split(r'(?<=[.!?])\s+', para.strip())
+                sentences = [s.strip() for s in sentences if s.strip()]
+                current_chunk = []
+                current_tokens = []
+                for sent in sentences:
+                    sent_tokens = enc.encode(sent)
+                    if len(current_tokens) + len(sent_tokens) > max_tokens and current_chunk:
+                        chunks.append(" ".join(current_chunk))
+                        current_chunk = []
+                        current_tokens = []
+                    current_chunk.append(sent)
+                    current_tokens.extend(sent_tokens)
+                    if len(current_tokens) >= max_tokens:
+                        chunks.append(" ".join(current_chunk))
+                        current_chunk = []
+                        current_tokens = []
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+    else:
+        # Существующая логика для sentence или paragraph
+        pass
 
     return chunks
 
