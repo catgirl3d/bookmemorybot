@@ -10,19 +10,23 @@ openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def split_text(text, max_tokens=1024):
+def split_text(text, max_tokens=750):
     enc = tiktoken.get_encoding("cl100k_base")
-    words = text.split()
-    chunks = []
-    chunk = []
 
-    for word in words:
-        chunk.append(word)
-        if len(enc.encode(" ".join(chunk))) > max_tokens:
-            chunks.append(" ".join(chunk))
-            chunk = []
-    if chunk:
-        chunks.append(" ".join(chunk))
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks = []
+    current = []
+
+    for para in paragraphs:
+        current.append(para)
+        tokens = enc.encode("\n\n".join(current))
+        if len(tokens) >= max_tokens:
+            chunks.append("\n\n".join(current))
+            current = []
+
+    if current:
+        chunks.append("\n\n".join(current))
+
     return chunks
 
 def embed_texts(texts):
