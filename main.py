@@ -1,15 +1,68 @@
+import pickle
+from pathlib import Path
 import chromadb
 from utils import split_text, embed_texts, ask_gpt
-from pathlib import Path
-import os
-from tqdm import tqdm
-import pickle
-import time
-import sys
-import hashlib
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
 
-# Настройка клиента ChromaDB
+class MemoryBotGUI:
+    def __init__(self, root, ask_fn, book_options):
+        self.root = root
+        self.ask_fn = ask_fn
+        self.root.title("Book Memory Bot")
+
+        ttk.Label(root, text="Выберите книгу:").pack(anchor="w")
+        self.book_var = tk.StringVar()
+        self.book_menu = ttk.Combobox(root, textvariable=self.book_var, values=book_options, state="readonly")
+        self.book_menu.pack(fill="x")
+
+        ttk.Label(root, text="Введите вопрос:").pack(anchor="w", pady=(10,0))
+        self.query_entry = ttk.Entry(root)
+        self.query_entry.pack(fill="x")
+
+        ttk.Button(root, text="Задать вопрос", command=self.ask_question).pack(pady=10)
+
+        ttk.Label(root, text="Релевантные фрагменты:").pack(anchor="w")
+        self.fragments_text = scrolledtext.ScrolledText(root, height=10)
+        self.fragments_text.pack(fill="both", expand=True)
+
+        ttk.Label(root, text="Ответ GPT:").pack(anchor="w")
+        self.answer_text = scrolledtext.ScrolledText(root, height=10)
+        self.answer_text.pack(fill="both", expand=True)
+
+    def ask_question(self):
+        book = self.book_var.get()
+        query = self.query_entry.get().strip()
+
+        if not book or not query:
+            messagebox.showwarning("Внимание", "Пожалуйста, выберите книгу и введите вопрос.")
+            return
+
+        fragments, answer = self.ask_fn(book, query)
+
+        self.fragments_text.delete("1.0", tk.END)
+        self.fragments_text.insert(tk.END, "\n\n".join(fragments))
+
+        self.answer_text.delete("1.0", tk.END)
+        self.answer_text.insert(tk.END, answer)
+
 client = chromadb.PersistentClient(path="db/")
+data_path = Path("data/")
+text_files = list(data_path.glob("*.txt"))
+assert text_files, "Положи хотя бы один .txt-файл в папку data/"
+
+collections = {}
+chunks_map = {}
+
+for file_path in text_files:
+    collection_name = file_path.stem.replace(" ", "_").lower()
+    collection = client.get_or_create_collection(name=collection_name)
+    collections[file_path.name] = collection
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    chunks = split_text(text)
+    chunks_map[file_path.name] = chunks
 
 def expand_chunks_by_neighbors(chunks, all_chunks, window=1):
     result = set(chunks)
@@ -25,142 +78,20 @@ def expand_chunks_by_neighbors(chunks, all_chunks, window=1):
             continue
     return list(result)
 
-# Поиск всех текстовых файлов в папке data
-data_path = Path("data/")
-text_files = list(data_path.glob("*.txt"))
-assert text_files, "Положи хотя бы один .txt-файл в папку data/"
+def ask_fn(book_name, query):
+    collection = collections[book_name]
+    all_chunks = chunks_map[book_name]
 
-# Проверка и обработка книг
+    query_embed = embed_texts([query])[0]
+    results = collection.query(query_embeddings=[query_embed], n_results=5, include=["documents"])
 
-def get_file_hash(file_path):
-    with open(file_path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()
+    relevant_chunks = results["documents"][0]
+    expanded_chunks = expand_chunks_by_neighbors(relevant_chunks, all_chunks)
 
-hash_path = Path("data/file_hashes.pkl")
-if hash_path.exists():
-    with open(hash_path, "rb") as f:
-        file_hashes = pickle.load(f)
-else:
-    file_hashes = {}
+    answer = ask_gpt(expanded_chunks, query)
+    return expanded_chunks, answer
 
-all_chunks_map = {}
-
-for file_path in text_files:
-    print(f"\nОбработка файла: {file_path.name}")
-    file_hash = get_file_hash(file_path)
-    collection_name = file_path.stem.replace(" ", "_").lower()
-
-    if file_path.name in file_hashes and file_hashes[file_path.name] != file_hash:
-        print("Файл изменён — коллекция будет пересоздана.")
-        client.delete_collection(collection_name)
-    elif file_path.name in file_hashes:
-        print("Файл не изменён. Пропуск загрузки.")
-        with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read()
-        all_chunks_map[file_path.name] = split_text(text)
-        continue
-
-    file_hashes[file_path.name] = file_hash
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    chunks = split_text(text)
-    all_chunks_map[file_path.name] = chunks
-    cache_path = file_path.with_suffix(".pkl")
-    embeddings = []
-
-    if cache_path.exists():
-        with open(cache_path, "rb") as f:
-            embeddings = pickle.load(f)
-        print("Загружены эмбеддинги из кэша.")
-    else:
-        retry_delay = 1
-        for i in tqdm(range(0, len(chunks), 10), desc="Создание эмбеддингов"):
-            batch = chunks[i:i+10]
-            while True:
-                try:
-                    batch_embeddings = embed_texts(batch)
-                    embeddings.extend(batch_embeddings)
-                    with open(cache_path, "wb") as f:
-                        pickle.dump(embeddings, f)
-                    retry_delay = 1
-                    break
-                except Exception as e:
-                    print(f"Ошибка при создании эмбеддингов: {e}. Повтор через {retry_delay} секунд...")
-                    time.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, 60)
-
-        print("Эмбеддинги сохранены в кэш.")
-
-    collection = client.get_or_create_collection(name=collection_name)
-    existing_ids = set(collection.get(ids=None)["ids"])
-
-    for i, chunk in enumerate(tqdm(chunks, desc="Сохранение в базу")):
-        doc_id = f"{file_path.stem}_chunk_{i}"
-        if doc_id in existing_ids:
-            continue
-        collection.add(
-            documents=[chunk],
-            embeddings=[embeddings[i]],
-            ids=[doc_id]
-        )
-
-with open("data/file_hashes.pkl", "wb") as f:
-    pickle.dump(file_hashes, f)
-
-print("\nДоступные файлы:")
-available_files = [f.name for f in text_files]
-for name in available_files:
-    print("-", name)
-
-existing_sources = set(available_files)
-target_file = input("\nВведите имя файла, по которому искать (или оставьте пустым для всех): ").strip()
-if target_file and target_file not in existing_sources:
-    print("Файл не найден. Будет выполнен поиск по всем книгам.")
-    target_file = ""
-
-while True:
-    query = input("\nВведите запрос (или 'exit' для выхода): ")
-    if query.strip().lower() == "exit":
-        print("Выход из программы.")
-        break
-
-    query_embedding_result = embed_texts([query])
-    if not query_embedding_result:
-        print("Ошибка: не удалось получить эмбеддинг запроса. Проверь подключение к API.")
-        continue
-
-    query_embed = query_embedding_result[0]
-
-    query_args = {
-        "query_embeddings": [query_embed],
-        "n_results": 5,
-        "include": ["documents"]
-    }
-
-    collections_to_query = []
-    if target_file:
-        collection_name = Path(target_file).stem.replace(" ", "_").lower()
-        collections_to_query = [client.get_or_create_collection(name=collection_name)]
-        all_chunks = all_chunks_map.get(target_file, [])
-    else:
-        collections_to_query = [client.get_or_create_collection(name=Path(f.name).stem.replace(" ", "_").lower()) for f in text_files]
-        all_chunks = []
-        for f in text_files:
-            all_chunks += all_chunks_map.get(f.name, [])
-
-    relevant_chunks = []
-    for col in collections_to_query:
-        results = col.query(**query_args)
-        relevant_chunks.extend(results["documents"][0])
-
-    relevant_chunks = expand_chunks_by_neighbors(relevant_chunks, all_chunks)
-
-    print("\nРелевантные фрагменты:")
-    for doc in relevant_chunks:
-        print("\n", doc)
-
-    answer = ask_gpt(relevant_chunks, query)
-    print("\nОтвет GPT:")
-    print(answer)
+if __name__ == "__main__":
+    root = tk.Tk()
+    gui = MemoryBotGUI(root, ask_fn, list(collections.keys()))
+    root.mainloop()
