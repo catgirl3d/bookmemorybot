@@ -1,0 +1,11 @@
+{
+    "batch_size": 10,
+    "neighbor_window": 1,
+    "search_results": 3,
+    "db_path": "db/",
+    "data_path": "data/",
+    "retry_max_delay": 60,
+    "gpt_model": "gpt-4.1-nano",
+    "gpt_temperature": 0.1,
+    "gpt_max_tokens": 15000
+}

@@ -1,0 +1,50 @@
+# Python-специфичные файлы
+__pycache__
+.pyc
+.pyo
+.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Кэш-файлы вашего скрипта
+.pkl
+data.pkl
+
+# Папка базы данных ChromaDB
+db
+data
+
+# Виртуальные окружения
+venv
+.env
+env
+.venv
+
+# Файлы IDE и редакторов
+.vscode
+.idea
+.sublime-project
+.sublime-workspace
+
+# Файлы, специфичные для ОС
+.DS_Store
+Thumbs.db
+
+# Чувствительные данные
+.env
+secrets.json
+credentials.json
+
+# Логи и временные файлы
+.log
+.tmp
+app.log
+temp
+
+# Сборка и дистрибутивы
+build
+dist
+.egg-info
+app.log
+app.log
