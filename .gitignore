@@ -7,7 +7,7 @@ __pycache__
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Кэш-файлы вашего скрипта
+# Кэш-файлы скрипта
 .pkl
 data.pkl
 
