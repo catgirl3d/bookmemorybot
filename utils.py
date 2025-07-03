@@ -14,7 +14,7 @@ CONFIG_PATH = "config.json"
 DEFAULT_GPT_CONFIG = {
     "gpt_model": "gpt-4.1-nano",
     "gpt_temperature": 0.1,
-    "gpt_max_tokens": 3500
+    "gpt_max_tokens": 7500
 }
 
 def load_or_create_config() -> Dict:
